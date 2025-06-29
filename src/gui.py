@@ -7,6 +7,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
 import logging
 from tkinterdnd2 import TkinterDnD
+import seaborn as sns 
 
 from .data_processor import DataProcessor
 from .model_trainer import ModelTrainer
@@ -39,6 +40,8 @@ class DefectPredictionApp:
         self.preprocessor = None
         self.feature_names = None
         self.original_feature_names_for_gui = None
+        self.initial_data_for_outliers = None 
+        self.numeric_features_for_outliers = None 
 
         self._create_widgets()
         self._setup_initial_state()
@@ -100,10 +103,12 @@ class DefectPredictionApp:
 
         self.results_tab = ttk.Frame(self.notebook)
         self.plots_tab = ttk.Frame(self.notebook)
+        self.outlier_plots_tab = ttk.Frame(self.notebook) 
         self.prediction_tab = ttk.Frame(self.notebook)
 
         self.notebook.add(self.results_tab, text="Results Table")
-        self.notebook.add(self.plots_tab, text="Plots")
+        self.notebook.add(self.plots_tab, text="Model Plots")
+        self.notebook.add(self.outlier_plots_tab, text="Feature Boxplots") 
         self.notebook.add(self.prediction_tab, text="Prediction")
 
         self.results_tree = ttk.Treeview(self.results_tab, columns=('Model', 'Accuracy', 'Precision', 'Recall', 'F1-Score', 'ROC-AUC', 'Cross-Val Accuracy'), show='headings')
@@ -127,7 +132,11 @@ class DefectPredictionApp:
         ttk.Button(plot_buttons_frame, text="PR Curve (Best Model)", command=self._plot_best_model_pr_curve).pack(side="left", padx=5, pady=2)
         ttk.Button(plot_buttons_frame, text="Feature Importance (Best Model)", command=self._plot_best_model_feature_importance).pack(side="left", padx=5, pady=2)
 
-
+        self.outlier_figure = plt.Figure(figsize=(12, 8))
+        self.outlier_canvas = FigureCanvasTkAgg(self.outlier_figure, master=self.outlier_plots_tab)
+        self.outlier_canvas_widget = self.outlier_canvas.get_tk_widget()
+        self.outlier_canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+        
         self._create_prediction_interface(self.prediction_tab)
 
     def _setup_initial_state(self):
@@ -153,7 +162,9 @@ class DefectPredictionApp:
             messagebox.showerror("Error", "Failed to load data. Check file path and format.")
             return
 
-        if not self.processor.preprocess_data(use_smote=True):
+        self.initial_data_for_outliers, self.numeric_features_for_outliers = self.processor.get_raw_data_for_outlier_plot()
+
+        if not self.processor.preprocess_data(use_smote=True, apply_capping=True):
             messagebox.showerror("Error", "Failed to preprocess data. Check your CSV file or target column.")
             return
 
@@ -171,11 +182,15 @@ class DefectPredictionApp:
         logging.info("Data ready for model training.")
         if self.original_feature_names_for_gui is not None and len(self.original_feature_names_for_gui) > 0:
             self._update_prediction_input_fields(self.original_feature_names_for_gui)
+        
+        if self.numeric_features_for_outliers and not self.initial_data_for_outliers.empty:
+            self._plot_all_outliers()
+            self.notebook.select(self.outlier_plots_tab)
 
-
+    # --- Missing Methods Start Here ---
     def _train_selected_model(self):
         if self.X_train is None:
-            messagebox.showerror("Error", "Data not loaded and preprocessed. Please load and preprocess data first.")
+            messagebox.showerror("Error", "Data not loaded. Please load and preprocess data first.")
             return
 
         model_name = self.selected_model.get()
@@ -184,123 +199,239 @@ class DefectPredictionApp:
             return
 
         try:
-            model = self.trainer.train_model(model_name, self.X_train, self.y_train)
-            if model:
-                self.current_trained_models[model_name] = model
-                messagebox.showinfo("Training Complete", f"Base model '{model_name}' successfully trained.")
-                self._evaluate_model_and_update_results(model_name, model)
+            messagebox.showinfo("Training Model", f"Training {model_name}...")
+            logging.info(f"Starting training for {model_name}.")
+            
+            # Reset the model from trainer's original dictionary to get a fresh instance
+            self.trainer.define_models() 
+            model = self.trainer.models[model_name]
+
+            # Fit on combined training and validation data for base training if cross-validation not used
+            model.fit(self.X_train, self.y_train)
+            
+            self.current_trained_models[model_name] = model
+            messagebox.showinfo("Training Complete", f"{model_name} trained successfully!")
+            logging.info(f"Model {model_name} training completed.")
+            
+            # Evaluate after training
+            self._evaluate_model(model_name, model)
+
         except Exception as e:
-            messagebox.showerror("Training Error", f"An error occurred while training base model {model_name}: {e}")
-            logging.error(f"Error training base model {model_name}: {e}", exc_info=True)
+            messagebox.showerror("Training Error", f"Failed to train {model_name}: {e}")
+            logging.error(f"Error training {model_name}: {e}", exc_info=True)
 
     def _train_all_models(self):
         if self.X_train is None:
-            messagebox.showerror("Error", "Data not loaded and preprocessed. Please load and preprocess data first.")
+            messagebox.showerror("Error", "Data not loaded. Please load and preprocess data first.")
             return
-        
+
         try:
-            self.trainer = ModelTrainer()
-            self.current_trained_models = self.trainer.train_all_models(self.X_train, self.y_train)
-            messagebox.showinfo("Training Complete", "All base models successfully trained.")
+            messagebox.showinfo("Training All Models", "Training all base models. This may take some time...")
+            logging.info("Starting training for all base models.")
+            
+            self.current_trained_models = {} # Clear previous trained models
+            self.trainer.define_models() # Ensure fresh models
+
+            for model_name, model_instance in self.trainer.models.items():
+                try:
+                    logging.info(f"Training {model_name}...")
+                    model_instance.fit(self.X_train, self.y_train)
+                    self.current_trained_models[model_name] = model_instance
+                    logging.info(f"{model_name} trained successfully.")
+                except Exception as e:
+                    logging.error(f"Failed to train {model_name}: {e}", exc_info=True)
+                    messagebox.showwarning("Training Warning", f"Failed to train {model_name}: {e}")
+
+            messagebox.showinfo("Training Complete", "All available base models have been trained.")
+            logging.info("All base models training completed.")
+            
+            # Evaluate all models after training
             self._evaluate_all_models()
+
         except Exception as e:
-            messagebox.showerror("Training Error", f"An error occurred while training all base models: {e}")
-            logging.error(f"Error training all base models: {e}", exc_info=True)
+            messagebox.showerror("Training Error", f"An unexpected error occurred during all models training: {e}")
+            logging.error(f"Unexpected error during all models training: {e}", exc_info=True)
 
     def _tune_selected_model(self):
         if self.X_train is None:
-            messagebox.showerror("Error", "Data not loaded and preprocessed. Please load and preprocess data first.")
+            messagebox.showerror("Error", "Data not loaded. Please load and preprocess data first.")
             return
-        
+
         model_name = self.selected_model.get()
         if not model_name:
-            messagebox.showerror("Error", "Please select a model for hyperparameter tuning.")
+            messagebox.showerror("Error", "Please select a model to tune.")
             return
         
         tuning_metric = self.tuning_metric.get()
         if not tuning_metric:
-            messagebox.showerror("Error", "Please select a metric for hyperparameter tuning.")
+            messagebox.showerror("Error", "Please select a tuning metric.")
             return
 
         try:
-            tuned_model = self.trainer.tune_hyperparameters(model_name, self.X_train, self.y_train, scoring=tuning_metric)
-            if tuned_model:
-                tuned_model_key = f"{model_name}_tuned_by_{tuning_metric}"
-                self.current_trained_models[tuned_model_key] = tuned_model
-                messagebox.showinfo("Tuning Complete", f"Hyperparameter tuning for model '{model_name}' completed. Best parameters found.")
-                self._evaluate_model_and_update_results(tuned_model_key, tuned_model)
+            messagebox.showinfo("Tuning Hyperparameters", f"Tuning hyperparameters for {model_name} using {tuning_metric}. This may take significant time...")
+            logging.info(f"Starting hyperparameter tuning for {model_name} with metric {tuning_metric}.")
+            
+            # Use X_train, y_train for GridSearchCV
+            best_model = self.trainer.tune_model(model_name, self.X_train, self.y_train, scoring=tuning_metric)
+            
+            if best_model:
+                self.current_trained_models[model_name] = best_model
+                messagebox.showinfo("Tuning Complete", f"Hyperparameter tuning for {model_name} completed. Best parameters found.")
+                logging.info(f"Hyperparameter tuning for {model_name} completed. Best parameters: {best_model.get_params()}")
+                
+                # Evaluate the tuned model
+                self._evaluate_model(model_name, best_model)
+            else:
+                messagebox.showwarning("Tuning Failed", f"Could not tune {model_name}. No best model returned.")
+                logging.warning(f"Tuning for {model_name} failed.")
+
         except Exception as e:
-            messagebox.showerror("Tuning Error", f"An error occurred during hyperparameter tuning for model {model_name}: {e}")
-            logging.error(f"Error during hyperparameter tuning for {model_name}: {e}", exc_info=True)
-
-
-    def _evaluate_model_and_update_results(self, model_name, model):
-        if self.X_train is None or self.X_val is None:
-            messagebox.showerror("Error", "Evaluation data (X_train, X_val) is not available.")
-            return
-
-        X_train_val = np.vstack((self.X_train, self.X_val))
-        y_train_val = np.concatenate((self.y_train, self.y_val))
-
-        results = self.evaluator.evaluate_model(model_name, model, self.X_val, self.y_val, self.X_test, self.y_test, X_train_val, y_train_val)
-        
-        if results is not None:
-            self._update_results_tree()
-            self._update_best_model_info()
-        else:
-            logging.error(f"Failed to get evaluation results for model {model_name}.")
-
+            messagebox.showerror("Tuning Error", f"Failed to tune {model_name}: {e}")
+            logging.error(f"Error tuning {model_name}: {e}", exc_info=True)
 
     def _evaluate_all_models(self):
         if not self.current_trained_models:
-            messagebox.showerror("Error", "No trained models to evaluate. Please train models first.")
+            messagebox.showerror("Error", "No models have been trained yet. Please train models first.")
+            return
+        if self.X_test is None or self.y_test is None:
+            messagebox.showerror("Error", "Test data not available. Please load and preprocess data.")
             return
         
-        self.evaluator = ModelEvaluator()
-        self.best_model_performance = 0
-        self.best_model_name = None
+        logging.info("Starting evaluation for all trained models.")
+        self.evaluator.clear_results() # Clear previous results
+        self.results_tree.delete(*self.results_tree.get_children()) # Clear GUI table
 
-        if self.feature_names is not None and len(self.feature_names) > 0:
-            self.evaluator.set_feature_names(self.feature_names)
-        else:
-            logging.warning("Feature names not available for evaluator. Feature importance plots may be affected.")
-
-
-        for model_name, model in self.current_trained_models.items():
-            self._evaluate_model_and_update_results(model_name, model)
+        for model_name, model_instance in self.current_trained_models.items():
+            try:
+                logging.info(f"Evaluating {model_name}...")
+                # Pass X_train, y_train for cross-validation within evaluator
+                self.evaluator.evaluate_model(model_name, model_instance, 
+                                              self.X_val, self.y_val, 
+                                              self.X_test, self.y_test,
+                                              self.X_train, self.y_train) # Pass training data for CV
+                
+                # Get the latest results to update the treeview
+                results_df = self.evaluator.get_results()
+                if not results_df.empty:
+                    latest_row = results_df[results_df['Model'] == model_name].iloc[0]
+                    self.results_tree.insert("", "end", values=tuple(latest_row))
+                logging.info(f"Evaluation for {model_name} complete.")
+            except Exception as e:
+                logging.error(f"Error evaluating {model_name}: {e}", exc_info=True)
+                messagebox.showwarning("Evaluation Warning", f"Failed to evaluate {model_name}: {e}")
         
-        messagebox.showinfo("Evaluation Complete", "All trained models evaluated. Results in the table.")
-        self.notebook.select(self.results_tab)
-        self._update_best_model_info()
+        self._update_best_model_display()
+        messagebox.showinfo("Evaluation Complete", "All trained models have been evaluated.")
+        logging.info("All model evaluations completed.")
 
-    def _update_best_model_info(self):
-        selected_metric = self.best_model_selection_metric.get()
-        logging.info(f"Updating best model info based on metric: {selected_metric}")
-        self.best_model_name, self.best_model_performance = self.evaluator.get_best_model_info(selected_metric)
-        if self.best_model_name:
-            logging.info(f"Current best model: {self.best_model_name} with {selected_metric}: {self.best_model_performance:.4f}")
-        else:
-            logging.info("No best model determined yet or results are empty.")
+    def _evaluate_model(self, model_name, model_instance):
+        """Helper to evaluate a single model and update results."""
+        if self.X_test is None or self.y_test is None:
+            logging.error("Test data not available for single model evaluation.")
+            return
 
-    def _update_best_model_on_metric_change(self, event=None):
-        self._update_best_model_info()
-        self._update_results_tree()
+        logging.info(f"Evaluating single model: {model_name}")
+        # Pass X_train, y_train for cross-validation within evaluator
+        self.evaluator.evaluate_model(model_name, model_instance, 
+                                      self.X_val, self.y_val, 
+                                      self.X_test, self.y_test,
+                                      self.X_train, self.y_train) # Pass training data for CV
 
-    def _update_results_tree(self):
-        for item in self.results_tree.get_children():
-            self.results_tree.delete(item)
-        
-        selected_metric = self.best_model_selection_metric.get()
+        # Update specific model's row or add new if not present
+        results_df = self.evaluator.get_results()
+        if not results_df.empty:
+            for item in self.results_tree.get_children():
+                if self.results_tree.item(item, 'values')[0] == model_name:
+                    self.results_tree.delete(item)
+                    break
+            latest_row = results_df[results_df['Model'] == model_name].iloc[0]
+            self.results_tree.insert("", "end", values=tuple(latest_row))
+        self._update_best_model_display()
+
+    def _update_best_model_display(self):
+        metric = self.best_model_selection_metric.get()
         results_df = self.evaluator.get_results()
 
-        if selected_metric in results_df.columns:
-            results_df = results_df.sort_values(by=selected_metric, ascending=False)
-        else:
-            logging.warning(f"Sorting metric '{selected_metric}' not found in results. Displaying unsorted results.")
+        if results_df.empty:
+            self.best_model_name = None
+            self.best_model_performance = 0
+            logging.info("No evaluation results to determine best model.")
+            return
 
-        for index, row in results_df.iterrows():
-            formatted_row = [row['Model']] + [f"{val:.4f}" if isinstance(val, (float, np.floating)) else val for val in row[1:]]
-            self.results_tree.insert("", "end", values=formatted_row)
+        metric_col_map = {
+            'Accuracy': 'Accuracy',
+            'Precision': 'Precision',
+            'Recall': 'Recall',
+            'F1-Score': 'F1-Score',
+            'ROC-AUC': 'ROC-AUC',
+            'Cross-Val Accuracy': 'Cross-Val Accuracy'
+        }
+        
+        selected_col = metric_col_map.get(metric, 'Cross-Val Accuracy') # Default to Cross-Val Accuracy
+
+        if selected_col not in results_df.columns:
+            logging.error(f"Selected metric column '{selected_col}' not found in results. Defaulting to Cross-Val Accuracy.")
+            selected_col = 'Cross-Val Accuracy'
+
+        if selected_col not in results_df.columns: # Fallback if default also not found (shouldn't happen)
+            messagebox.showwarning("Warning", f"Could not find metric '{metric}' or default 'Cross-Val Accuracy' in results.")
+            self.best_model_name = None
+            self.best_model_performance = 0
+            return
+
+        best_row = results_df.loc[results_df[selected_col].idxmax()]
+        self.best_model_name = best_row['Model']
+        self.best_model_performance = best_row[selected_col]
+        logging.info(f"Best model based on {metric}: {self.best_model_name} with {metric} = {self.best_model_performance:.4f}")
+        
+        # Highlight best model in Treeview
+        for item in self.results_tree.get_children():
+            model_name_in_tree = self.results_tree.item(item, 'values')[0]
+            self.results_tree.item(item, tags=()) # Clear previous tags
+            if model_name_in_tree == self.best_model_name:
+                self.results_tree.item(item, tags=('best_model_tag',))
+        
+        self.results_tree.tag_configure('best_model_tag', background='lightblue', foreground='black')
+
+
+    def _update_best_model_on_metric_change(self, event=None):
+        self._update_best_model_display()
+
+    # --- End Missing Methods ---
+
+    def _plot_all_outliers(self):
+        if self.initial_data_for_outliers is None or self.initial_data_for_outliers.empty or not self.numeric_features_for_outliers:
+            messagebox.warning("Warning", "No numeric data available for feature boxplots. Please load and preprocess data.")
+            self.outlier_figure.clear() 
+            self.outlier_canvas.draw()
+            return
+
+        num_features = len(self.numeric_features_for_outliers)
+        if num_features == 0:
+            messagebox.info("Info", "No numeric features to plot boxplots.")
+            self.outlier_figure.clear()
+            self.outlier_canvas.draw()
+            return
+
+        rows = int(np.ceil(np.sqrt(num_features)))
+        cols = int(np.ceil(num_features / rows))
+
+        self.outlier_figure.clear() 
+        axes = self.outlier_figure.subplots(rows, cols, squeeze=False)
+        axes = axes.flatten()
+
+        for i, feature in enumerate(self.numeric_features_for_outliers):
+            sns.boxplot(y=self.initial_data_for_outliers[feature], ax=axes[i])
+            axes[i].set_title(feature)
+            axes[i].set_ylabel("")
+
+        for j in range(i + 1, len(axes)):
+            self.outlier_figure.delaxes(axes[j])
+        
+        self.outlier_figure.suptitle('Boxplots of All Numeric Features', y=1.02)
+        self.outlier_figure.tight_layout(rect=[0, 0.03, 1, 0.98])
+        
+        self.outlier_canvas.draw()
 
     def _plot_best_model_confusion_matrix(self):
         logging.info(f"Attempting to plot confusion matrix. Best model: {self.best_model_name}")

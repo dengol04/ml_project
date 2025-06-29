@@ -20,6 +20,7 @@ class DataProcessor:
         self.preprocessor = None
         self.feature_names = None
         self.original_feature_names = None
+        self.numeric_features = None # To store numeric feature names after initial load
 
     def load_data(self):
         try:
@@ -36,7 +37,7 @@ class DataProcessor:
             logging.error(f"Error loading data: {e}", exc_info=True)
             return False
 
-    def preprocess_data(self, test_size=0.2, val_size=0.25, random_state=42, use_smote=True):
+    def preprocess_data(self, test_size=0.2, val_size=0.25, random_state=42, use_smote=True, apply_capping=True):
         if self.data is None:
             logging.error("No data loaded. Call load_data() first.")
             return False
@@ -64,12 +65,12 @@ class DataProcessor:
                  logging.error("Target column contains non-numeric values that cannot be coerced to numbers.")
                  return False
 
-        numeric_features = self.X.select_dtypes(include=np.number).columns
+        self.numeric_features = self.X.select_dtypes(include=np.number).columns
         categorical_features = self.X.select_dtypes(include='object').columns
 
-        if self.X[numeric_features].isnull().sum().sum() > 0:
+        if self.X[self.numeric_features].isnull().sum().sum() > 0:
             logging.warning("Missing values detected in numeric features. Filling with mean.")
-            for col in numeric_features:
+            for col in self.numeric_features:
                 if self.X[col].isnull().any():
                     self.X[col] = self.X[col].fillna(self.X[col].mean())
         
@@ -79,9 +80,14 @@ class DataProcessor:
                 if self.X[col].isnull().any():
                     self.X[col] = self.X[col].fillna(self.X[col].mode()[0])
 
+        if apply_capping:
+            logging.info("Applying capping to numeric features.")
+            self._apply_capping(self.X, self.numeric_features)
+
+
         self.preprocessor = ColumnTransformer(
             transformers=[
-                ('num', StandardScaler(), numeric_features),
+                ('num', StandardScaler(), self.numeric_features),
                 ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
             ],
             remainder='passthrough'
@@ -131,6 +137,13 @@ class DataProcessor:
         logging.info("Data preprocessing complete.")
         return True
 
+    def _apply_capping(self, df, numeric_features, lower_bound_percentile=0.01, upper_bound_percentile=0.99):
+        for col in numeric_features:
+            lower_bound = df[col].quantile(lower_bound_percentile)
+            upper_bound = df[col].quantile(upper_bound_percentile)
+            df[col] = np.clip(df[col], lower_bound, upper_bound)
+            logging.info(f"Capping applied to '{col}': values clipped between {lower_bound:.2f} and {upper_bound:.2f}")
+
     def get_data(self):
         return self.X_train, self.y_train, self.X_val, self.y_val, self.X_test, self.y_test
 
@@ -142,3 +155,15 @@ class DataProcessor:
 
     def get_original_feature_names(self):
         return self.original_feature_names
+
+    def get_raw_data_for_outlier_plot(self):
+        if self.data is None:
+            logging.error("No data loaded to get raw data for feature boxplots.")
+            return pd.DataFrame(), []
+        
+        numeric_cols = self.data.select_dtypes(include=np.number).columns.tolist()
+        
+        if self.target_column in numeric_cols:
+            numeric_cols.remove(self.target_column)
+            
+        return self.data[numeric_cols].copy(), numeric_cols
