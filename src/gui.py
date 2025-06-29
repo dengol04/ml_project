@@ -112,13 +112,26 @@ class DefectPredictionApp:
             self.results_tree.column(col, width=120, anchor=tk.CENTER)
         self.results_tree.pack(fill="both", expand=True)
 
-        self.figure, self.ax = plt.subplots(figsize=(10, 6))
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self.plots_tab)
-        self.canvas_widget = self.canvas.get_tk_widget()
-        self.canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+        # Scrollable Plots Tab
+        self.plot_canvas = tk.Canvas(self.plots_tab)
+        self.plot_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        plot_buttons_frame = ttk.Frame(self.plots_tab)
-        plot_buttons_frame.pack(side="bottom", fill="x", pady=5)
+        self.plot_scrollbar = ttk.Scrollbar(self.plots_tab, orient="vertical", command=self.plot_canvas.yview)
+        self.plot_scrollbar.pack(side=tk.RIGHT, fill="y")
+
+        self.plot_canvas.configure(yscrollcommand=self.plot_scrollbar.set)
+        self.plot_canvas.bind('<Configure>', lambda e: self.plot_canvas.configure(scrollregion=self.plot_canvas.bbox("all")))
+        
+        self.scrollable_frame = ttk.Frame(self.plot_canvas)
+        self.plot_canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
+        self.figure, self.ax = plt.subplots(figsize=(10, 6))
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.scrollable_frame)
+        self.canvas_widget = self.canvas.get_tk_widget()
+        self.canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        plot_buttons_frame = ttk.Frame(self.scrollable_frame)
+        plot_buttons_frame.pack(side="top", fill="x", pady=5) # Changed to side="top" to be below the canvas
         ttk.Button(plot_buttons_frame, text="Confusion Matrix (Best Model)", command=self._plot_best_model_confusion_matrix).pack(side="left", padx=5, pady=2)
         ttk.Button(plot_buttons_frame, text="Model Comparison (Accuracy)", command=lambda: self._plot_model_comparison('Accuracy')).pack(side="left", padx=5, pady=2)
         ttk.Button(plot_buttons_frame, text="Model Comparison (F1-Score)", command=lambda: self._plot_model_comparison('F1-Score')).pack(side="left", padx=5, pady=2)
