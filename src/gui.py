@@ -112,7 +112,6 @@ class DefectPredictionApp:
             self.results_tree.column(col, width=120, anchor=tk.CENTER)
         self.results_tree.pack(fill="both", expand=True)
 
-        # Scrollable Plots Tab
         self.plot_canvas = tk.Canvas(self.plots_tab)
         self.plot_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -130,8 +129,12 @@ class DefectPredictionApp:
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
+        self.canvas_widget.bind("<Configure>", self._resize_plot_figure)
+        self.root.after(100, self._resize_plot_figure)
+
+
         plot_buttons_frame = ttk.Frame(self.scrollable_frame)
-        plot_buttons_frame.pack(side="top", fill="x", pady=5) # Changed to side="top" to be below the canvas
+        plot_buttons_frame.pack(side="top", fill="x", pady=5)
         ttk.Button(plot_buttons_frame, text="Confusion Matrix (Best Model)", command=self._plot_best_model_confusion_matrix).pack(side="left", padx=5, pady=2)
         ttk.Button(plot_buttons_frame, text="Model Comparison (Accuracy)", command=lambda: self._plot_model_comparison('Accuracy')).pack(side="left", padx=5, pady=2)
         ttk.Button(plot_buttons_frame, text="Model Comparison (F1-Score)", command=lambda: self._plot_model_comparison('F1-Score')).pack(side="left", padx=5, pady=2)
@@ -142,6 +145,16 @@ class DefectPredictionApp:
 
 
         self._create_prediction_interface(self.prediction_tab)
+
+    def _resize_plot_figure(self, event=None):
+        if self.canvas_widget.winfo_width() > 1 and self.canvas_widget.winfo_height() > 1:
+            new_width_inches = self.canvas_widget.winfo_width() / self.figure.dpi
+            new_height_inches = self.canvas_widget.winfo_height() / self.figure.dpi
+            
+            self.figure.set_size_inches(new_width_inches, new_height_inches, forward=True)
+            self.figure.tight_layout()
+            self.canvas.draw_idle()
+            logging.debug(f"Resized plot figure to: {new_width_inches:.2f}x{new_height_inches:.2f} inches")
 
     def _setup_initial_state(self):
         self.model_combobox['values'] = list(self.trainer.models.keys())
