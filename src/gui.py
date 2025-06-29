@@ -3,7 +3,7 @@ from tkinter import ttk, filedialog, messagebox
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import os
 import logging
 from tkinterdnd2 import TkinterDnD
@@ -40,8 +40,19 @@ class DefectPredictionApp:
         self.feature_names = None
         self.original_feature_names_for_gui = None
 
+        self.plot_window = None
+        self.plot_canvas_tkagg = None
+        self.current_figure = None
+
         self._create_widgets()
         self._setup_initial_state()
+
+        self.roc_canvas = None
+        self.roc_toolbar = None
+        self.pr_canvas = None
+        self.pr_toolbar = None
+        self.fi_canvas = None
+        self.fi_toolbar = None
 
     def _create_widgets(self):
         data_frame = ttk.LabelFrame(self.root, text="Data Configuration", padding="10")
@@ -99,11 +110,9 @@ class DefectPredictionApp:
         self.notebook.pack(fill="both", expand=True)
 
         self.results_tab = ttk.Frame(self.notebook)
-        self.plots_tab = ttk.Frame(self.notebook)
         self.prediction_tab = ttk.Frame(self.notebook)
 
         self.notebook.add(self.results_tab, text="Results Table")
-        self.notebook.add(self.plots_tab, text="Plots")
         self.notebook.add(self.prediction_tab, text="Prediction")
 
         self.results_tree = ttk.Treeview(self.results_tab, columns=('Model', 'Accuracy', 'Precision', 'Recall', 'F1-Score', 'ROC-AUC', 'Cross-Val Accuracy'), show='headings')
@@ -112,49 +121,82 @@ class DefectPredictionApp:
             self.results_tree.column(col, width=120, anchor=tk.CENTER)
         self.results_tree.pack(fill="both", expand=True)
 
-        self.plot_canvas = tk.Canvas(self.plots_tab)
-        self.plot_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        plot_control_frame = ttk.LabelFrame(results_frame, text="Plot Controls", padding="5")
+        plot_control_frame.pack(side="bottom", fill="x", pady=5)
 
-        self.plot_scrollbar = ttk.Scrollbar(self.plots_tab, orient="vertical", command=self.plot_canvas.yview)
-        self.plot_scrollbar.pack(side=tk.RIGHT, fill="y")
-
-        self.plot_canvas.configure(yscrollcommand=self.plot_scrollbar.set)
-        self.plot_canvas.bind('<Configure>', lambda e: self.plot_canvas.configure(scrollregion=self.plot_canvas.bbox("all")))
-        
-        self.scrollable_frame = ttk.Frame(self.plot_canvas)
-        self.plot_canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-
-        self.figure, self.ax = plt.subplots(figsize=(10, 6))
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self.scrollable_frame)
-        self.canvas_widget = self.canvas.get_tk_widget()
-        self.canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-        self.canvas_widget.bind("<Configure>", self._resize_plot_figure)
-        self.root.after(100, self._resize_plot_figure)
-
-
-        plot_buttons_frame = ttk.Frame(self.scrollable_frame)
-        plot_buttons_frame.pack(side="top", fill="x", pady=5)
-        ttk.Button(plot_buttons_frame, text="Confusion Matrix (Best Model)", command=self._plot_best_model_confusion_matrix).pack(side="left", padx=5, pady=2)
-        ttk.Button(plot_buttons_frame, text="Model Comparison (Accuracy)", command=lambda: self._plot_model_comparison('Accuracy')).pack(side="left", padx=5, pady=2)
-        ttk.Button(plot_buttons_frame, text="Model Comparison (F1-Score)", command=lambda: self._plot_model_comparison('F1-Score')).pack(side="left", padx=5, pady=2)
-        ttk.Button(plot_buttons_frame, text="Model Comparison (ROC-AUC)", command=lambda: self._plot_model_comparison('ROC-AUC')).pack(side="left", padx=5, pady=2)
-        ttk.Button(plot_buttons_frame, text="ROC Curve (Best Model)", command=self._plot_best_model_roc_curve).pack(side="left", padx=5, pady=2)
-        ttk.Button(plot_buttons_frame, text="PR Curve (Best Model)", command=self._plot_best_model_pr_curve).pack(side="left", padx=5, pady=2)
-        ttk.Button(plot_buttons_frame, text="Feature Importance (Best Model)", command=self._plot_best_model_feature_importance).pack(side="left", padx=5, pady=2)
+        ttk.Button(plot_control_frame, text="Confusion Matrix (Best Model)", command=self._plot_best_model_confusion_matrix).pack(side="left", padx=5, pady=2)
+        ttk.Button(plot_control_frame, text="Model Comparison (Accuracy)", command=lambda: self._plot_model_comparison('Accuracy')).pack(side="left", padx=5, pady=2)
+        ttk.Button(plot_control_frame, text="Model Comparison (F1-Score)", command=lambda: self._plot_model_comparison('F1-Score')).pack(side="left", padx=5, pady=2)
+        ttk.Button(plot_control_frame, text="Model Comparison (ROC-AUC)", command=lambda: self._plot_model_comparison('ROC-AUC')).pack(side="left", padx=5, pady=2)
+        ttk.Button(plot_control_frame, text="ROC Curve (Best Model)", command=self._plot_best_model_roc_curve).pack(side="left", padx=5, pady=2)
+        ttk.Button(plot_control_frame, text="PR Curve (Best Model)", command=self._plot_best_model_pr_curve).pack(side="left", padx=5, pady=2)
+        ttk.Button(plot_control_frame, text="Feature Importance (Best Model)", command=self._plot_best_model_feature_importance).pack(side="left", padx=5, pady=2)
 
 
         self._create_prediction_interface(self.prediction_tab)
 
-    def _resize_plot_figure(self, event=None):
-        if self.canvas_widget.winfo_width() > 1 and self.canvas_widget.winfo_height() > 1:
-            new_width_inches = self.canvas_widget.winfo_width() / self.figure.dpi
-            new_height_inches = self.canvas_widget.winfo_height() / self.figure.dpi
-            
-            self.figure.set_size_inches(new_width_inches, new_height_inches, forward=True)
-            self.figure.tight_layout()
-            self.canvas.draw_idle()
-            logging.debug(f"Resized plot figure to: {new_width_inches:.2f}x{new_height_inches:.2f} inches")
+    def _display_plot_in_new_window(self, fig, title="Matplotlib Plot"):
+        if self.plot_window and self.plot_window.winfo_exists():
+            logging.info("Closing previous plot window.")
+            self.plot_window.destroy()
+            if self.current_figure and plt.fignum_exists(self.current_figure.number):
+                plt.close(self.current_figure) 
+            self.plot_window = None
+            self.plot_canvas_tkagg = None
+            self.current_figure = None
+
+        self.plot_window = tk.Toplevel(self.root)
+        self.plot_window.title(title)
+        self.plot_window.geometry("1000x700")
+
+        self.current_figure = fig
+
+        self.plot_canvas_tkagg = FigureCanvasTkAgg(self.current_figure, master=self.plot_window)
+        canvas_widget = self.plot_canvas_tkagg.get_tk_widget()
+        canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        toolbar = NavigationToolbar2Tk(self.plot_canvas_tkagg, self.plot_window)
+        toolbar.update()
+        canvas_widget.focus_set()
+
+        def _on_plot_window_resize(event=None):
+            if event and event.width > 1 and event.height > 1 and self.current_figure:
+                try:
+                    dpi = self.root.winfo_fpixels('1i')
+                except tk.TclError:
+                    dpi = self.current_figure.dpi
+
+                toolbar_height = toolbar.winfo_height() if toolbar.winfo_ismapped() else 0
+                new_width_inches = event.width / dpi
+                new_height_inches = (event.height - toolbar_height) / dpi 
+
+                min_width_inches = 6.0
+                min_height_inches = 4.0
+
+                final_width_inches = max(min_width_inches, new_width_inches)
+                final_height_inches = max(min_height_inches, new_height_inches)
+                
+                self.current_figure.set_size_inches(final_width_inches, final_height_inches, forward=True)
+                self.current_figure.tight_layout()
+                self.plot_canvas_tkagg.draw_idle()
+                logging.debug(f"Plot window resized plot figure to: {final_width_inches:.2f}x{final_height_inches:.2f} inches")
+
+        self.plot_window.bind('<Configure>', _on_plot_window_resize)
+        
+        self.plot_canvas_tkagg.draw()
+
+        self.plot_window.protocol("WM_DELETE_WINDOW", self._on_plot_window_close)
+    
+    def _on_plot_window_close(self):
+        if self.plot_window:
+            self.plot_window.destroy()
+            if self.current_figure and plt.fignum_exists(self.current_figure.number):
+                plt.close(self.current_figure)
+            logging.info("Plot window closed and matplotlib figure freed.")
+            self.plot_window = None
+            self.plot_canvas_tkagg = None
+            self.current_figure = None
+
 
     def _setup_initial_state(self):
         self.model_combobox['values'] = list(self.trainer.models.keys())
@@ -339,12 +381,11 @@ class DefectPredictionApp:
             logging.error(f"Predictions not found for {self.best_model_name} in evaluator.last_predictions.")
             return
 
-        logging.info(f"Predictions found for {self.best_model_name}. Proceeding with plotting confusion matrix.")
-        self.ax.clear()
-        self.evaluator.plot_confusion_matrix(self.best_model_name, self.ax)
-        self.figure.tight_layout()
-        self.canvas.draw()
-        self.notebook.select(self.plots_tab)
+        plt.close('all') 
+        fig, ax = plt.subplots(figsize=(8, 6))
+        self.evaluator.plot_confusion_matrix(self.best_model_name, ax)
+        fig.tight_layout()
+        self._display_plot_in_new_window(fig, title=f"Confusion Matrix - {self.best_model_name}")
 
 
     def _plot_model_comparison(self, metric):
@@ -355,11 +396,11 @@ class DefectPredictionApp:
             logging.warning("Results DataFrame is empty for model comparison plot.")
             return
 
-        self.ax.clear()
-        self.evaluator.plot_metric_comparison(metric, self.ax)
-        self.figure.tight_layout()
-        self.canvas.draw()
-        self.notebook.select(self.plots_tab)
+        plt.close('all') 
+        fig, ax = plt.subplots(figsize=(10, 6))
+        self.evaluator.plot_metric_comparison(metric, ax)
+        fig.tight_layout()
+        self._display_plot_in_new_window(fig, title=f"Model Comparison - {metric}")
 
     def _plot_best_model_roc_curve(self):
         logging.info(f"Attempting to plot ROC curve. Best model: {self.best_model_name}")
@@ -372,12 +413,11 @@ class DefectPredictionApp:
             logging.error(f"Predictions (probabilities) not found for {self.best_model_name} in evaluator.last_predictions.")
             return
 
-        logging.info(f"Predictions (probabilities) found for {self.best_model_name}. Proceeding with plotting ROC curve.")
-        self.ax.clear()
-        self.evaluator.plot_roc_curve(self.best_model_name, self.ax)
-        self.figure.tight_layout()
-        self.canvas.draw()
-        self.notebook.select(self.plots_tab)
+        plt.close('all') 
+        fig, ax = plt.subplots(figsize=(8, 6))
+        self.evaluator.plot_roc_curve(self.best_model_name, ax)
+        fig.tight_layout()
+        self._display_plot_in_new_window(fig, title=f"ROC Curve - {self.best_model_name}")
 
     def _plot_best_model_pr_curve(self):
         logging.info(f"Attempting to plot PR curve. Best model: {self.best_model_name}")
@@ -390,12 +430,11 @@ class DefectPredictionApp:
             logging.error(f"Predictions (probabilities) not found for {self.best_model_name} in evaluator.last_predictions.")
             return
 
-        logging.info(f"Predictions (probabilities) found for {self.best_model_name}. Proceeding with plotting PR curve.")
-        self.ax.clear()
-        self.evaluator.plot_pr_curve(self.best_model_name, self.ax)
-        self.figure.tight_layout()
-        self.canvas.draw()
-        self.notebook.select(self.plots_tab)
+        plt.close('all') 
+        fig, ax = plt.subplots(figsize=(8, 6))
+        self.evaluator.plot_pr_curve(self.best_model_name, ax)
+        fig.tight_layout()
+        self._display_plot_in_new_window(fig, title=f"PR Curve - {self.best_model_name}")
 
     def _plot_best_model_feature_importance(self):
         logging.info(f"Attempting to plot feature importance. Best model: {self.best_model_name}")
@@ -414,12 +453,11 @@ class DefectPredictionApp:
             logging.error("Feature names are None or empty.")
             return
 
-        logging.info(f"Feature names and model found. Proceeding with plotting feature importance for {self.best_model_name}.")
-        self.ax.clear()
-        self.evaluator.plot_feature_importance(self.best_model_name, model, self.ax)
-        self.figure.tight_layout()
-        self.canvas.draw()
-        self.notebook.select(self.plots_tab)
+        plt.close('all') 
+        fig, ax = plt.subplots(figsize=(10, 8))
+        self.evaluator.plot_feature_importance(self.best_model_name, model, ax)
+        fig.tight_layout()
+        self._display_plot_in_new_window(fig, title=f"Feature Importance - {self.best_model_name}")
 
 
     def _save_best_model(self):

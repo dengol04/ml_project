@@ -37,7 +37,6 @@ class DataProcessor:
             return False
 
     def _apply_capping(self, df, numeric_features, lower_bound_percentile, upper_bound_percentile):
-        """Applies outlier capping to specified numeric features."""
         for col in numeric_features:
             lower_bound = df[col].quantile(lower_bound_percentile)
             upper_bound = df[col].quantile(upper_bound_percentile)
