@@ -25,6 +25,7 @@ class DefectPredictionApp:
         self.target_column = tk.StringVar(value='is_defect')
         self.selected_model = tk.StringVar()
         self.tuning_metric = tk.StringVar(value='f1')
+        self.best_model_selection_metric = tk.StringVar(value='Cross-Val Accuracy')
 
         self.processor = None
         self.trainer = ModelTrainer()
@@ -74,10 +75,19 @@ class DefectPredictionApp:
         ttk.Button(model_frame, text="Tune Hyperparameters (Selected)", command=self._tune_selected_model).grid(row=1, column=2, padx=5, pady=2)
         ttk.Button(model_frame, text="Evaluate All Models", command=self._evaluate_all_models).grid(row=1, column=3, padx=5, pady=2)
 
-        ttk.Button(model_frame, text="Save Best Model", command=self._save_best_model).grid(row=2, column=0, padx=5, pady=2)
+        ttk.Label(model_frame, text="Best Model By:").grid(row=2, column=0, padx=5, pady=2, sticky="w")
+        self.best_model_metric_combobox = ttk.Combobox(model_frame, textvariable=self.best_model_selection_metric,
+                                                        values=['Accuracy', 'Precision', 'Recall', 'F1-Score', 'ROC-AUC', 'Cross-Val Accuracy'],
+                                                        state="readonly")
+        self.best_model_metric_combobox.grid(row=2, column=1, padx=5, pady=2, sticky="ew")
+        self.best_model_metric_combobox.set('Cross-Val Accuracy')
+        self.best_model_metric_combobox.bind("<<ComboboxSelected>>", self._update_best_model_on_metric_change)
+
+
+        ttk.Button(model_frame, text="Save Best Model", command=self._save_best_model).grid(row=3, column=0, padx=5, pady=2)
         
-        ttk.Button(model_frame, text="Load Model from Dropdown", command=self._load_model_for_prediction).grid(row=2, column=1, padx=5, pady=2, sticky="ew")
-        ttk.Button(model_frame, text="Load Model from File", command=self._load_model_file_dialog).grid(row=2, column=2, padx=5, pady=2, columnspan=2, sticky="ew")
+        ttk.Button(model_frame, text="Load Model from Dropdown", command=self._load_model_for_prediction).grid(row=3, column=1, padx=5, pady=2, sticky="ew")
+        ttk.Button(model_frame, text="Load Model from File", command=self._load_model_file_dialog).grid(row=3, column=2, padx=5, pady=2, columnspan=2, sticky="ew")
 
         model_frame.grid_columnconfigure(1, weight=1)
 
@@ -235,13 +245,8 @@ class DefectPredictionApp:
         results = self.evaluator.evaluate_model(model_name, model, self.X_val, self.y_val, self.X_test, self.y_test, X_train_val, y_train_val)
         
         if results is not None:
-            self._update_results_tree(self.evaluator.get_results())
-            
-            current_best_name, current_best_performance = self.evaluator.get_best_model_info()
-            if current_best_performance > self.best_model_performance:
-                self.best_model_performance = current_best_performance
-                self.best_model_name = current_best_name
-                logging.info(f"New best model: {self.best_model_name} with CV Accuracy: {self.best_model_performance:.4f}")
+            self._update_results_tree()
+            self._update_best_model_info()
         else:
             logging.error(f"Failed to get evaluation results for model {model_name}.")
 
@@ -266,11 +271,33 @@ class DefectPredictionApp:
         
         messagebox.showinfo("Evaluation Complete", "All trained models evaluated. Results in the table.")
         self.notebook.select(self.results_tab)
+        self._update_best_model_info()
 
-    def _update_results_tree(self, results_df):
+    def _update_best_model_info(self):
+        selected_metric = self.best_model_selection_metric.get()
+        logging.info(f"Updating best model info based on metric: {selected_metric}")
+        self.best_model_name, self.best_model_performance = self.evaluator.get_best_model_info(selected_metric)
+        if self.best_model_name:
+            logging.info(f"Current best model: {self.best_model_name} with {selected_metric}: {self.best_model_performance:.4f}")
+        else:
+            logging.info("No best model determined yet or results are empty.")
+
+    def _update_best_model_on_metric_change(self, event=None):
+        self._update_best_model_info()
+        self._update_results_tree()
+
+    def _update_results_tree(self):
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
         
+        selected_metric = self.best_model_selection_metric.get()
+        results_df = self.evaluator.get_results()
+
+        if selected_metric in results_df.columns:
+            results_df = results_df.sort_values(by=selected_metric, ascending=False)
+        else:
+            logging.warning(f"Sorting metric '{selected_metric}' not found in results. Displaying unsorted results.")
+
         for index, row in results_df.iterrows():
             formatted_row = [row['Model']] + [f"{val:.4f}" if isinstance(val, (float, np.floating)) else val for val in row[1:]]
             self.results_tree.insert("", "end", values=formatted_row)
@@ -282,7 +309,7 @@ class DefectPredictionApp:
             return
         
         if self.best_model_name not in self.evaluator.last_predictions:
-            messagebox.showerror("Error", "No saved test predictions for the best model. Re-evaluate the model.")
+            messagebox.showerror("Error", "No saved test predictions for the current best model. Please re-evaluate models.")
             logging.error(f"Predictions not found for {self.best_model_name} in evaluator.last_predictions.")
             return
 
@@ -315,7 +342,7 @@ class DefectPredictionApp:
             return
         
         if self.best_model_name not in self.evaluator.last_predictions:
-            messagebox.showerror("Error", "No saved test predictions (probabilities) for the best model. Re-evaluate the model.")
+            messagebox.showerror("Error", "No saved test predictions (probabilities) for the current best model. Please re-evaluate models.")
             logging.error(f"Predictions (probabilities) not found for {self.best_model_name} in evaluator.last_predictions.")
             return
 
@@ -333,7 +360,7 @@ class DefectPredictionApp:
             return
         
         if self.best_model_name not in self.evaluator.last_predictions:
-            messagebox.showerror("Error", "No saved test predictions (probabilities) for the best model. Re-evaluate the model.")
+            messagebox.showerror("Error", "No saved test predictions (probabilities) for the current best model. Please re-evaluate models.")
             logging.error(f"Predictions (probabilities) not found for {self.best_model_name} in evaluator.last_predictions.")
             return
 

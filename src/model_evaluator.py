@@ -91,16 +91,21 @@ class ModelEvaluator:
     def get_results(self):
         return self.results.sort_values(by='Cross-Val Accuracy', ascending=False)
     
-    def get_best_model_info(self):
+    def get_best_model_info(self, metric='Cross-Val Accuracy'):
         if self.results.empty:
             logging.warning("ModelEvaluator: Results DataFrame is empty, cannot determine best model.")
             return None, 0
-        if 'Cross-Val Accuracy' not in self.results.columns or self.results['Cross-Val Accuracy'].isnull().all():
-            logging.warning("ModelEvaluator: 'Cross-Val Accuracy' column is missing or all NaN. Cannot determine best model by this metric.")
+        
+        if metric not in self.results.columns:
+            logging.error(f"ModelEvaluator: Metric '{metric}' not found in results columns. Cannot determine best model by this metric.")
+            return None, 0
+        
+        if self.results[metric].isnull().all():
+            logging.warning(f"ModelEvaluator: '{metric}' column is all NaN. Cannot determine best model by this metric.")
             return None, 0
 
-        best_row = self.results.loc[self.results['Cross-Val Accuracy'].idxmax()]
-        return best_row['Model'], best_row['Cross-Val Accuracy']
+        best_row = self.results.loc[self.results[metric].idxmax()]
+        return best_row['Model'], best_row[metric]
 
     def plot_confusion_matrix(self, model_name, ax):
         logging.info(f"ModelEvaluator: Plotting confusion matrix for {model_name}")
