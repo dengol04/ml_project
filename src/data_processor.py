@@ -4,7 +4,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from imblearn.over_sampling import SMOTE
 from sklearn.compose import ColumnTransformer
 import logging
-import numpy as np 
+import numpy as np
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -36,7 +36,17 @@ class DataProcessor:
             logging.error(f"Error loading data: {e}", exc_info=True)
             return False
 
-    def preprocess_data(self, test_size=0.2, val_size=0.25, random_state=42, use_smote=True):
+    def _apply_capping(self, df, numeric_features, lower_bound_percentile, upper_bound_percentile):
+        """Applies outlier capping to specified numeric features."""
+        for col in numeric_features:
+            lower_bound = df[col].quantile(lower_bound_percentile)
+            upper_bound = df[col].quantile(upper_bound_percentile)
+            df[col] = np.clip(df[col], lower_bound, upper_bound)
+            logging.info(f"Capped column '{col}' at {lower_bound_percentile*100}% ({lower_bound:.2f}) and {upper_bound_percentile*100}% ({upper_bound:.2f}).")
+        return df
+
+    def preprocess_data(self, test_size=0.2, val_size=0.25, random_state=42, use_smote=True,
+                        apply_capping=True, lower_bound_percentile=0.01, upper_bound_percentile=0.99):
         if self.data is None:
             logging.error("No data loaded. Call load_data() first.")
             return False
@@ -47,7 +57,7 @@ class DataProcessor:
 
         self.X = self.data.drop(columns=[self.target_column])
         self.y = self.data[self.target_column]
-        
+
         self.original_feature_names = self.X.columns.to_numpy()
 
         if self.y.dtype == 'object':
@@ -72,12 +82,18 @@ class DataProcessor:
             for col in numeric_features:
                 if self.X[col].isnull().any():
                     self.X[col] = self.X[col].fillna(self.X[col].mean())
-        
+
         if self.X[categorical_features].isnull().sum().sum() > 0:
             logging.warning("Missing values detected in categorical features. Filling with mode.")
             for col in categorical_features:
                 if self.X[col].isnull().any():
                     self.X[col] = self.X[col].fillna(self.X[col].mode()[0])
+
+        if apply_capping and len(numeric_features) > 0:
+            self.X = self._apply_capping(self.X, numeric_features, lower_bound_percentile, upper_bound_percentile)
+            logging.info("Outlier capping applied to numeric features.")
+        elif apply_capping and len(numeric_features) == 0:
+            logging.warning("Capping requested but no numeric features found to apply it to.")
 
         self.preprocessor = ColumnTransformer(
             transformers=[
@@ -86,7 +102,7 @@ class DataProcessor:
             ],
             remainder='passthrough'
         )
-        
+
         X_train_val, self.X_test, y_train_val, self.y_test = train_test_split(
             self.X, self.y, test_size=test_size, random_state=random_state, stratify=self.y
         )
@@ -109,9 +125,9 @@ class DataProcessor:
 
         if use_smote:
             class_counts = pd.Series(self.y_train).value_counts()
-            
+
             min_samples = class_counts.min() if not class_counts.empty else 0
-            
+
             if len(class_counts) < 2:
                 logging.warning("SMOTE skipped: Only one class found in training data. Cannot apply SMOTE.")
             elif min_samples < 2:
@@ -119,7 +135,7 @@ class DataProcessor:
                                 "Need at least 2 samples to apply SMOTE with default k_neighbors=1.")
             else:
                 logging.info(f"Original training class distribution: {class_counts.to_dict()}")
-                
+
                 smote_k_neighbors = min(5, min_samples - 1)
                 if smote_k_neighbors < 1:
                     logging.warning(f"Calculated k_neighbors for SMOTE is {smote_k_neighbors}. SMOTE requires k_neighbors >= 1. Skipping SMOTE.")
@@ -127,7 +143,7 @@ class DataProcessor:
                     smote = SMOTE(random_state=random_state, k_neighbors=smote_k_neighbors)
                     self.X_train, self.y_train = smote.fit_resample(self.X_train, self.y_train)
                     logging.info(f"SMOTE applied with k_neighbors={smote_k_neighbors}. New training class distribution: {pd.Series(self.y_train).value_counts().to_dict()}")
-        
+
         logging.info("Data preprocessing complete.")
         return True
 
@@ -135,8 +151,8 @@ class DataProcessor:
         return self.X_train, self.y_train, self.X_val, self.y_val, self.X_test, self.y_test
 
     def get_preprocessor(self):
-        return self.preprocessor 
-    
+        return self.preprocessor
+
     def get_feature_names(self):
         return self.feature_names
 
