@@ -76,7 +76,7 @@ class DefectPredictionApp:
         self.model_combobox.grid(row=0, column=1, padx=5, pady=2, sticky="ew")
         self.model_combobox.set('RandomForestClassifier')
         
-        ttk.Button(model_frame, text="Train Base Model", command=self._train_selected_model).grid(row=0, column=2, padx=5, pady=2)
+        ttk.Button(model_frame, text="Train Selected Base Model", command=self._train_selected_model).grid(row=0, column=2, padx=5, pady=2)
         ttk.Button(model_frame, text="Train All Base Models", command=self._train_all_models).grid(row=0, column=3, padx=5, pady=2)
 
         ttk.Label(model_frame, text="Tuning Metric:").grid(row=1, column=0, padx=5, pady=2, sticky="w")
@@ -86,12 +86,12 @@ class DefectPredictionApp:
         ttk.Button(model_frame, text="Tune Hyperparameters (Selected)", command=self._tune_selected_model).grid(row=1, column=2, padx=5, pady=2)
         ttk.Button(model_frame, text="Evaluate All Models", command=self._evaluate_all_models).grid(row=1, column=3, padx=5, pady=2)
 
-        ttk.Label(model_frame, text="Best Model By:").grid(row=2, column=0, padx=5, pady=2, sticky="w")
+        ttk.Label(model_frame, text="Best Model by:").grid(row=2, column=0, padx=5, pady=2, sticky="w")
         self.best_model_metric_combobox = ttk.Combobox(model_frame, textvariable=self.best_model_selection_metric,
                                                         values=['Accuracy', 'Precision', 'Recall', 'F1-Score', 'ROC-AUC', 'Cross-Val Accuracy'],
                                                         state="readonly")
         self.best_model_metric_combobox.grid(row=2, column=1, padx=5, pady=2, sticky="ew")
-        self.best_model_metric_combobox.set('Cross-Val Accuracy')
+        self.best_model_selection_metric.set('Cross-Val Accuracy')
         self.best_model_metric_combobox.bind("<<ComboboxSelected>>", self._update_best_model_on_metric_change)
 
 
@@ -106,6 +106,11 @@ class DefectPredictionApp:
         results_frame = ttk.LabelFrame(self.root, text="Results and Visualization", padding="10")
         results_frame.pack(side="top", fill="both", expand=True, padx=10, pady=5)
 
+        # Place plot controls first at the bottom
+        plot_control_frame = ttk.LabelFrame(results_frame, text="Plot Controls", padding="5")
+        plot_control_frame.pack(side="bottom", fill="x", pady=5)
+
+        # Then, the notebook fills the remaining space
         self.notebook = ttk.Notebook(results_frame)
         self.notebook.pack(fill="both", expand=True)
 
@@ -120,9 +125,6 @@ class DefectPredictionApp:
             self.results_tree.heading(col, text=col)
             self.results_tree.column(col, width=120, anchor=tk.CENTER)
         self.results_tree.pack(fill="both", expand=True)
-
-        plot_control_frame = ttk.LabelFrame(results_frame, text="Plot Controls", padding="5")
-        plot_control_frame.pack(side="bottom", fill="x", pady=5)
 
         ttk.Button(plot_control_frame, text="Confusion Matrix (Best Model)", command=self._plot_best_model_confusion_matrix).pack(side="left", padx=5, pady=2)
         ttk.Button(plot_control_frame, text="Model Comparison (Accuracy)", command=lambda: self._plot_model_comparison('Accuracy')).pack(side="left", padx=5, pady=2)
@@ -179,7 +181,7 @@ class DefectPredictionApp:
                 self.current_figure.set_size_inches(final_width_inches, final_height_inches, forward=True)
                 self.current_figure.tight_layout()
                 self.plot_canvas_tkagg.draw_idle()
-                logging.debug(f"Plot window resized plot figure to: {final_width_inches:.2f}x{final_height_inches:.2f} inches")
+                logging.debug(f"Plot window resized to: {final_width_inches:.2f}x{final_height_inches:.2f} inches")
 
         self.plot_window.bind('<Configure>', _on_plot_window_resize)
         
@@ -192,7 +194,7 @@ class DefectPredictionApp:
             self.plot_window.destroy()
             if self.current_figure and plt.fignum_exists(self.current_figure.number):
                 plt.close(self.current_figure)
-            logging.info("Plot window closed and matplotlib figure freed.")
+            logging.info("Plot window closed, matplotlib figure released.")
             self.plot_window = None
             self.plot_canvas_tkagg = None
             self.current_figure = None
@@ -331,13 +333,13 @@ class DefectPredictionApp:
         if self.feature_names is not None and len(self.feature_names) > 0:
             self.evaluator.set_feature_names(self.feature_names)
         else:
-            logging.warning("Feature names not available for evaluator. Feature importance plots may be affected.")
+            logging.warning("Feature names are not available for evaluator. Feature importance plots might be affected.")
 
 
         for model_name, model in self.current_trained_models.items():
             self._evaluate_model_and_update_results(model_name, model)
         
-        messagebox.showinfo("Evaluation Complete", "All trained models evaluated. Results in the table.")
+        messagebox.showinfo("Evaluation Complete", "All trained models evaluated. Results in table.")
         self.notebook.select(self.results_tab)
         self._update_best_model_info()
 
@@ -348,7 +350,7 @@ class DefectPredictionApp:
         if self.best_model_name:
             logging.info(f"Current best model: {self.best_model_name} with {selected_metric}: {self.best_model_performance:.4f}")
         else:
-            logging.info("No best model determined yet or results are empty.")
+            logging.info("Best model not yet determined or results are empty.")
 
     def _update_best_model_on_metric_change(self, event=None):
         self._update_best_model_info()
@@ -373,7 +375,7 @@ class DefectPredictionApp:
     def _plot_best_model_confusion_matrix(self):
         logging.info(f"Attempting to plot confusion matrix. Best model: {self.best_model_name}")
         if self.best_model_name is None:
-            messagebox.showerror("Error", "No best model to display confusion matrix. Train and evaluate models first.")
+            messagebox.showerror("Error", "No best model to display confusion matrix. Please train and evaluate models first.")
             return
         
         if self.best_model_name not in self.evaluator.last_predictions:
@@ -389,10 +391,10 @@ class DefectPredictionApp:
 
 
     def _plot_model_comparison(self, metric):
-        logging.info(f"Attempting to plot model comparison for metric: {metric}.")
+        logging.info(f"Attempting to plot model comparison by metric: {metric}.")
         results_df = self.evaluator.get_results()
         if results_df.empty:
-            messagebox.warning("Warning", "No data to plot. Evaluate models first.")
+            messagebox.warning("Warning", "No data to plot. Please evaluate models first.")
             logging.warning("Results DataFrame is empty for model comparison plot.")
             return
 
@@ -405,7 +407,7 @@ class DefectPredictionApp:
     def _plot_best_model_roc_curve(self):
         logging.info(f"Attempting to plot ROC curve. Best model: {self.best_model_name}")
         if self.best_model_name is None:
-            messagebox.showerror("Error", "No best model to display ROC curve. Train and evaluate models first.")
+            messagebox.showerror("Error", "No best model to display ROC curve. Please train and evaluate models first.")
             return
         
         if self.best_model_name not in self.evaluator.last_predictions:
@@ -422,7 +424,7 @@ class DefectPredictionApp:
     def _plot_best_model_pr_curve(self):
         logging.info(f"Attempting to plot PR curve. Best model: {self.best_model_name}")
         if self.best_model_name is None:
-            messagebox.showerror("Error", "No best model to display PR curve. Train and evaluate models first.")
+            messagebox.showerror("Error", "No best model to display PR curve. Please train and evaluate models first.")
             return
         
         if self.best_model_name not in self.evaluator.last_predictions:
@@ -439,7 +441,7 @@ class DefectPredictionApp:
     def _plot_best_model_feature_importance(self):
         logging.info(f"Attempting to plot feature importance. Best model: {self.best_model_name}")
         if self.best_model_name is None:
-            messagebox.showerror("Error", "No best model to display feature importance. Train and evaluate models first.")
+            messagebox.showerror("Error", "No best model to display feature importance. Please train and evaluate models first.")
             return
         
         model = self.current_trained_models.get(self.best_model_name)
@@ -449,8 +451,8 @@ class DefectPredictionApp:
             return
         
         if self.feature_names is None or len(self.feature_names) == 0:
-            messagebox.showerror("Error", "Feature names are not loaded. Please load and preprocess data.")
-            logging.error("Feature names are None or empty.")
+            messagebox.showerror("Error", "Feature names not loaded. Please load and preprocess data.")
+            logging.error("Feature names are missing or empty.")
             return
 
         plt.close('all') 
@@ -472,7 +474,7 @@ class DefectPredictionApp:
                 self.trainer.save_model(self.preprocessor, 'preprocessor')
             messagebox.showinfo("Save Complete", f"Best model '{self.best_model_name}' and preprocessor successfully saved.")
         except Exception as e:
-            messagebox.showerror("Save Error", f"Failed to save the best model or preprocessor: {e}")
+            messagebox.showerror("Save Error", f"Failed to save best model or preprocessor: {e}")
             logging.error(f"Error saving best model: {e}", exc_info=True)
 
     def _load_model_for_prediction(self):
@@ -492,7 +494,7 @@ class DefectPredictionApp:
                  self._update_prediction_input_fields(self.original_feature_names_for_gui)
                  messagebox.showinfo("Model Loaded", f"Model '{model_name_to_load}' and preprocessor successfully loaded for prediction.")
             else:
-                 messagebox.showwarning("Warning", "Original feature names not available. "
+                 messagebox.showwarning("Warning", "Original feature names are not available. "
                                         "Please load and preprocess data first, then load the model for prediction.")
         else:
             messagebox.showerror("Error", f"Failed to load model '{model_name_to_load}' or preprocessor. Ensure they are saved and correct names are used.")
@@ -518,9 +520,9 @@ class DefectPredictionApp:
                     self._update_prediction_input_fields(self.original_feature_names_for_gui)
                     messagebox.showinfo("Model Loaded", f"Model '{model_name}' and preprocessor successfully loaded for prediction.")
                 else:
-                    messagebox.showwarning("Warning", "Original feature names not available. Please load and preprocess data first, then load the model for prediction.")
+                    messagebox.showwarning("Warning", "Original feature names are not available. Please load and preprocess data first, then load the model for prediction.")
             else:
-                messagebox.showerror("Loading Error", f"Failed to load model '{model_name}' or preprocessor. Ensure they are saved and correct.")
+                messagebox.showerror("Loading Error", f"Failed to load model '{model_name}' or preprocessor. Ensure they are saved and valid.")
         except Exception as e:
             messagebox.showerror("Loading Error", f"An error occurred while loading the model: {e}")
             logging.error(f"Error loading model via file dialog: {e}", exc_info=True)
@@ -530,7 +532,7 @@ class DefectPredictionApp:
         self.prediction_inputs = {}
         self.input_frames = []
 
-        self.prediction_info_label = ttk.Label(parent_tab, text="Load data and a model to input parameters for prediction.")
+        self.prediction_info_label = ttk.Label(parent_tab, text="Load data and a model to enter parameters for prediction.")
         self.prediction_info_label.pack(pady=10)
 
         self.input_fields_container = ttk.Frame(parent_tab)
@@ -571,11 +573,11 @@ class DefectPredictionApp:
                 logging.error("Prediction model not loaded.")
                 return
             if self.preprocessor is None:
-                messagebox.showerror("Error", "Preprocessor not trained or loaded. Load and preprocess data or load a preprocessor first.")
+                messagebox.showerror("Error", "Preprocessor not trained or loaded. Load and preprocess data or load preprocessor.")
                 logging.error("Preprocessor not loaded.")
                 return
             if self.original_feature_names_for_gui is None or len(self.original_feature_names_for_gui) == 0:
-                messagebox.showerror("Error", "Feature names not available. Load and preprocess data first.")
+                messagebox.showerror("Error", "Feature names not available. Please load and preprocess data first.")
                 logging.error("Original feature names for GUI are not available.")
                 return
 
@@ -588,7 +590,7 @@ class DefectPredictionApp:
                         raise ValueError(f"Input field for feature '{feature}' not found. This indicates a mismatch between expected and available input fields.")
                     input_values[feature] = float(entry.get())
             except ValueError as ve:
-                messagebox.showerror("Input Error", f"Please enter numerical values for all features. Error: {ve}")
+                messagebox.showerror("Input Error", f"Please enter numeric values for all features. Error: {ve}")
                 logging.error(f"Input conversion error: {ve}", exc_info=True)
                 return
             except Exception as e:
